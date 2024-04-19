@@ -5,6 +5,7 @@ from media.display import *
 from media.media import *
 import time, os
 import sys
+
 def camera_test():
     print("camera_test")
     # use hdmi for display
@@ -51,6 +52,7 @@ def camera_test():
     time.sleep_ms(100)
     # deinit media buffer
     media.buffer_deinit()
+
 if __name__ == "__main__":
     os.exitpoint(os.EXITPOINT_ENABLE)
     camera_test()
