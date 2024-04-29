@@ -2,13 +2,14 @@ from media.display import *
 from media.media import *
 import time, os, sys, gc
 import lvgl as lv
+from machine import TOUCH
 
-DISPLAY_WIDTH = ALIGN_UP(1920, 16)
-DISPLAY_HEIGHT = 1080
+DISPLAY_WIDTH = ALIGN_UP(480, 16)
+DISPLAY_HEIGHT = 800
 
 def display_init():
     # use hdmi for display
-    display.init(LT9611_1920X1080_30FPS)
+    display.init(2)
     # config vb for osd layer
     config = k_vb_config()
     config.max_pool_cnt = 1
@@ -44,6 +45,27 @@ def disp_drv_flush_cb(disp_drv, area, color):
         osd_img.copy_from(color.__dereference__(osd_img.size()))
     disp_drv.flush_ready()
 
+class touch_screen():
+    def __init__(self):
+        self.x = 0
+        self.y = 0
+        self.state = lv.INDEV_STATE.RELEASED
+
+        self.indev_drv = lv.indev_create()
+        self.indev_drv.set_type(lv.INDEV_TYPE.POINTER)
+        self.indev_drv.set_read_cb(self.callback)
+        self.touch = TOUCH(0)
+
+    def callback(self, driver, data):
+        x, y, state = self.x, self.y, lv.INDEV_STATE.RELEASED
+        tp = self.touch.read(1)
+        if len(tp):
+            x, y, event = tp[0].x, tp[0].y, tp[0].event
+            if event == 2 or event == 3:
+                state = lv.INDEV_STATE.PRESSED
+        data.point = lv.point_t({'x': x, 'y': y})
+        data.state = state
+
 def lvgl_init():
     lv.init()
     disp_drv = lv.disp_create(DISPLAY_WIDTH, DISPLAY_HEIGHT)
@@ -53,11 +75,20 @@ def lvgl_init():
     disp_drv.set_draw_buffers(buf1.bytearray(), buf2.bytearray(), buf1.size(), lv.DISP_RENDER_MODE.DIRECT)
     globals()["buf1"] = buf1
     globals()["buf2"] = buf2
+    tp = touch_screen()
 
 def lvgl_deinit():
     lv.deinit()
     del globals()["buf1"]
     del globals()["buf2"]
+
+def btn_clicked_event(event):
+    btn = lv.btn.__cast__(event.get_target())
+    label = lv.label.__cast__(btn.get_user_data())
+    if "on" == label.get_text():
+        label.set_text("off")
+    else:
+        label.set_text("on")
 
 def user_gui_init():
     res_path = "/sdcard/app/tests/lvgl/data/"
@@ -108,6 +139,13 @@ def user_gui_init():
     animimg0.set_duration(2000)
     animimg0.set_repeat_count(lv.ANIM_REPEAT_INFINITE)
     animimg0.start()
+
+    btn = lv.btn(lv.scr_act())
+    btn.align(lv.ALIGN.CENTER, 0, lv.pct(25))
+    label = lv.label(btn)
+    label.set_text('on')
+    btn.set_user_data(label)
+    btn.add_event(btn_clicked_event, lv.EVENT.CLICKED, None)
 
 def main():
     os.exitpoint(os.EXITPOINT_ENABLE)
