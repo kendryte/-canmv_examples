@@ -1,9 +1,11 @@
 import glob
+import os
 import sys
 import shutil
 
 
 copy_map = {
+    "ai_cube_examples": "16-AI-Cube",
     "ai_demo": "04-AI-Demo",
     "April-tags": "07-April-Tags",
     "cipher": "03-Cipher",
@@ -26,5 +28,8 @@ if __name__ == '__main__':
     for key in copy_map:
         scripts = glob.glob(f"{sys.argv[1]}/{key}/*.py", recursive=True)
         target = f"examples/{copy_map[key]}/"
+        if os.path.exists(target):
+            shutil.rmtree(target)
+        os.mkdir(target)
         for script in scripts:
-            shutil.copy(script, target)
+            shutil.copy2(script, target)

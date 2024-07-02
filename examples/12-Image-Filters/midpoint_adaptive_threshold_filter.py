@@ -3,81 +3,62 @@
 # This example shows off midpoint filtering with adaptive thresholding.
 # When midpoint(threshold=True) the midpoint() method adaptive thresholds the image
 # by comparing the midpoint of the pixels around a pixel, minus an offset, with that pixel.
-
-from media.camera import *
-from media.display import *
-from media.media import *
 import time, os, gc, sys
 
-DISPLAY_WIDTH = ALIGN_UP(1920, 16)
-DISPLAY_HEIGHT = 1080
-SCALE = 4
-DETECT_WIDTH = DISPLAY_WIDTH // SCALE
-DETECT_HEIGHT = DISPLAY_HEIGHT // SCALE
+from media.sensor import *
+from media.display import *
+from media.media import *
+
+DETECT_WIDTH = ALIGN_UP(320, 16)
+DETECT_HEIGHT = 240
+
+sensor = None
 
 def camera_init():
-    # use hdmi for display
-    display.init(LT9611_1920X1080_30FPS)
-    # config vb for osd layer
-    config = k_vb_config()
-    config.max_pool_cnt = 1
-    config.comm_pool[0].blk_size = 4*DISPLAY_WIDTH*DISPLAY_HEIGHT
-    config.comm_pool[0].blk_cnt = 1
-    config.comm_pool[0].mode = VB_REMAP_MODE_NOCACHE
-    # meida buffer config
-    media.buffer_config(config)
-    # init default sensor
-    camera.sensor_init(CAM_DEV_ID_0, CAM_DEFAULT_SENSOR)
+    global sensor
+
+    # construct a Sensor object with default configure
+    sensor = Sensor(width=DETECT_WIDTH,height=DETECT_HEIGHT)
+    # sensor reset
+    sensor.reset()
+    # set hmirror
+    # sensor.set_hmirror(False)
+    # sensor vflip
+    # sensor.set_vflip(False)
+
     # set chn0 output size
-    camera.set_outsize(CAM_DEV_ID_0, CAM_CHN_ID_0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    sensor.set_framesize(width=DETECT_WIDTH,height=DETECT_HEIGHT)
     # set chn0 output format
-    camera.set_outfmt(CAM_DEV_ID_0, CAM_CHN_ID_0, PIXEL_FORMAT_YUV_SEMIPLANAR_420)
-    # create meida source device
-    globals()["meida_source"] = media_device(CAMERA_MOD_ID, CAM_DEV_ID_0, CAM_CHN_ID_0)
-    # create meida sink device
-    globals()["meida_sink"] = media_device(DISPLAY_MOD_ID, DISPLAY_DEV_ID, DISPLAY_CHN_VIDEO1)
-    # create meida link
-    media.create_link(meida_source, meida_sink)
-    # set display plane with video channel
-    display.set_plane(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, PIXEL_FORMAT_YVU_PLANAR_420, DISPLAY_MIRROR_NONE, DISPLAY_CHN_VIDEO1)
-    # set chn1 output nv12
-    camera.set_outsize(CAM_DEV_ID_0, CAM_CHN_ID_1, DETECT_WIDTH, DETECT_HEIGHT)
-    camera.set_outfmt(CAM_DEV_ID_0, CAM_CHN_ID_1, PIXEL_FORMAT_RGB_888)
-    # media buffer init
-    media.buffer_init()
-    # request media buffer for osd image
-    globals()["buffer"] = media.request_buffer(4 * DISPLAY_WIDTH * DISPLAY_HEIGHT)
-    # start stream for camera device0
-    camera.start_stream(CAM_DEV_ID_0)
+    sensor.set_pixformat(Sensor.RGB565)
+
+    # use IDE as display output
+    Display.init(Display.VIRT, width= DETECT_WIDTH, height = DETECT_HEIGHT,fps=100,to_ide = True)
+    # init media manager
+    MediaManager.init()
+    # sensor start run
+    sensor.run()
 
 def camera_deinit():
-    # stop stream for camera device0
-    camera.stop_stream(CAM_DEV_ID_0)
+    global sensor
+
+    # sensor stop run
+    sensor.stop()
     # deinit display
-    display.deinit()
+    Display.deinit()
+    # sleep
     os.exitpoint(os.EXITPOINT_ENABLE_SLEEP)
     time.sleep_ms(100)
     # release media buffer
-    media.release_buffer(globals()["buffer"])
-    # destroy media link
-    media.destroy_link(globals()["meida_source"], globals()["meida_sink"])
-    # deinit media buffer
-    media.buffer_deinit()
+    MediaManager.deinit()
 
 def capture_picture():
-    # create image for osd
-    buffer = globals()["buffer"]
-    osd_img = image.Image(DETECT_WIDTH, DETECT_HEIGHT, image.RGB565, alloc=image.ALLOC_VB, phyaddr=buffer.phys_addr, virtaddr=buffer.virt_addr, poolid=buffer.pool_id)
-    osd_img.clear()
-    display.show_image(osd_img, 0, 0, DISPLAY_CHN_OSD0)
     fps = time.clock()
     while True:
         fps.tick()
         try:
             os.exitpoint()
-            rgb888_img = camera.capture_image(CAM_DEV_ID_0, CAM_CHN_ID_1)
-            img = rgb888_img.to_rgb565()
-            camera.release_image(CAM_DEV_ID_0, CAM_CHN_ID_1, rgb888_img)
+            global sensor
+            img = sensor.snapshot()
             # The first argument is the kernel size. N coresponds to a ((N*2)+1)^2
             # kernel size. E.g. 1 == 3x3 kernel, 2 == 5x5 kernel, etc. Note: You
             # shouldn't ever need to use a value bigger than 2. The "bias" argument
@@ -85,15 +66,16 @@ def capture_picture():
             # 0.0 == min filter, and 1.0 == max filter. Note that the min filter
             # makes images darker while the max filter makes images lighter.
             img.midpoint(1, bias=0.5, threshold=True, offset=5, invert=True)
-            img.copy_to(osd_img)
-            del img
+            # draw result to screen
+            Display.show_image(img)
+            img = None
             gc.collect()
             print(fps.fps())
         except KeyboardInterrupt as e:
             print("user stop: ", e)
             break
         except BaseException as e:
-            sys.print_exception(e)
+            print(f"Exception {e}")
             break
 
 def main():
@@ -106,7 +88,7 @@ def main():
         print("camera capture")
         capture_picture()
     except Exception as e:
-        sys.print_exception(e)
+        print(f"Exception {e}")
     finally:
         if camera_is_init:
             print("camera deinit")

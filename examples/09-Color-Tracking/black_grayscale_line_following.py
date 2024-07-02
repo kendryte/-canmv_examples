@@ -9,17 +9,14 @@
 # For this script to work properly you should point the camera at a line at a
 # 45 or so degree angle. Please make sure that only the line is within the
 # camera's field of view.
-
-from media.camera import *
-from media.display import *
-from media.media import *
 import time, os, gc, sys, math
 
-DISPLAY_WIDTH = ALIGN_UP(1920, 16)
-DISPLAY_HEIGHT = 1080
-SCALE = 4
-DETECT_WIDTH = DISPLAY_WIDTH // SCALE
-DETECT_HEIGHT = DISPLAY_HEIGHT // SCALE
+from media.sensor import *
+from media.display import *
+from media.media import *
+
+DETECT_WIDTH = 640
+DETECT_HEIGHT = 480
 
 # Tracks a black line. Use [(128, 255)] for a tracking a white line.
 GRAYSCALE_THRESHOLD = [(0, 64)]
@@ -38,134 +35,103 @@ ROIS = [ # [ROI, weight]
 weight_sum = 0
 for r in ROIS: weight_sum += r[4] # r[4] is the roi weight.
 
-def camera_init():
-    # use hdmi for display
-    display.init(LT9611_1920X1080_30FPS)
-    # config vb for osd layer
-    config = k_vb_config()
-    config.max_pool_cnt = 1
-    config.comm_pool[0].blk_size = 4*DISPLAY_WIDTH*DISPLAY_HEIGHT
-    config.comm_pool[0].blk_cnt = 1
-    config.comm_pool[0].mode = VB_REMAP_MODE_NOCACHE
-    # meida buffer config
-    media.buffer_config(config)
-    # init default sensor
-    camera.sensor_init(CAM_DEV_ID_0, CAM_DEFAULT_SENSOR)
+sensor = None
+
+try:
+    # construct a Sensor object with default configure
+    sensor = Sensor(width = DETECT_WIDTH, height = DETECT_HEIGHT)
+    # sensor reset
+    sensor.reset()
+    # set hmirror
+    # sensor.set_hmirror(False)
+    # sensor vflip
+    # sensor.set_vflip(False)
     # set chn0 output size
-    camera.set_outsize(CAM_DEV_ID_0, CAM_CHN_ID_0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    sensor.set_framesize(width = DETECT_WIDTH, height = DETECT_HEIGHT)
     # set chn0 output format
-    camera.set_outfmt(CAM_DEV_ID_0, CAM_CHN_ID_0, PIXEL_FORMAT_YUV_SEMIPLANAR_420)
-    # create meida source device
-    globals()["meida_source"] = media_device(CAMERA_MOD_ID, CAM_DEV_ID_0, CAM_CHN_ID_0)
-    # create meida sink device
-    globals()["meida_sink"] = media_device(DISPLAY_MOD_ID, DISPLAY_DEV_ID, DISPLAY_CHN_VIDEO1)
-    # create meida link
-    media.create_link(meida_source, meida_sink)
-    # set display plane with video channel
-    display.set_plane(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, PIXEL_FORMAT_YVU_PLANAR_420, DISPLAY_MIRROR_NONE, DISPLAY_CHN_VIDEO1)
-    # set chn1 output nv12
-    camera.set_outsize(CAM_DEV_ID_0, CAM_CHN_ID_1, DETECT_WIDTH, DETECT_HEIGHT)
-    camera.set_outfmt(CAM_DEV_ID_0, CAM_CHN_ID_1, PIXEL_FORMAT_RGB_888)
-    # media buffer init
-    media.buffer_init()
-    # request media buffer for osd image
-    globals()["buffer"] = media.request_buffer(4 * DISPLAY_WIDTH * DISPLAY_HEIGHT)
-    # start stream for camera device0
-    camera.start_stream(CAM_DEV_ID_0)
+    sensor.set_pixformat(Sensor.GRAYSCALE)
 
-def camera_deinit():
-    # stop stream for camera device0
-    camera.stop_stream(CAM_DEV_ID_0)
-    # deinit display
-    display.deinit()
-    os.exitpoint(os.EXITPOINT_ENABLE_SLEEP)
-    time.sleep_ms(100)
-    # release media buffer
-    media.release_buffer(globals()["buffer"])
-    # destroy media link
-    media.destroy_link(globals()["meida_source"], globals()["meida_sink"])
-    # deinit media buffer
-    media.buffer_deinit()
+    # use hdmi as display output, set to VGA
+    # Display.init(Display.LT9611, width = 640, height = 480, to_ide = True)
 
-def capture_picture():
-    # create image for drawing
-    draw_img = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.ARGB8888)
-    # create image for osd
-    buffer = globals()["buffer"]
-    osd_img = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.ARGB8888, alloc=image.ALLOC_VB, phyaddr=buffer.phys_addr, virtaddr=buffer.virt_addr, poolid=buffer.pool_id)
-    osd_img.clear()
-    display.show_image(osd_img, 0, 0, DISPLAY_CHN_OSD0)
+    # use hdmi as display output, set to 1080P
+    # Display.init(Display.LT9611, width = 1920, height = 1080, to_ide = True)
+
+    # use lcd as display output
+    # Display.init(Display.ST7701, to_ide = True)
+
+    # use IDE as output
+    Display.init(Display.VIRT, width = DETECT_WIDTH, height = DETECT_HEIGHT, fps = 100)
+
+    # init media manager
+    MediaManager.init()
+    # sensor start run
+    sensor.run()
+
     fps = time.clock()
+
     while True:
         fps.tick()
-        try:
-            os.exitpoint()
-            rgb888_img = camera.capture_image(CAM_DEV_ID_0, CAM_CHN_ID_1)
-            img = rgb888_img.to_grayscale()
-            camera.release_image(CAM_DEV_ID_0, CAM_CHN_ID_1, rgb888_img)
-            draw_img.clear()
-            centroid_sum = 0
-            for r in ROIS:
-                blobs = img.find_blobs(GRAYSCALE_THRESHOLD, roi=r[0:4], merge=True) # r[0:4] is roi tuple.
 
-                if blobs:
-                    # Find the blob with the most pixels.
-                    largest_blob = max(blobs, key=lambda b: b.pixels())
+        # check if should exit.
+        os.exitpoint()
+        img = sensor.snapshot()
 
-                    # Draw a rect around the blob.
-                    draw_img.draw_rectangle([v*SCALE for v in largest_blob.rect()])
-                    draw_img.draw_cross(largest_blob.cx()*SCALE, largest_blob.cy()*SCALE)
+        centroid_sum = 0
+        for r in ROIS:
+            blobs = img.find_blobs(GRAYSCALE_THRESHOLD, roi=r[0:4], merge=True) # r[0:4] is roi tuple.
 
-                    centroid_sum += largest_blob.cx() * r[4] # r[4] is the roi weight.
+            if blobs:
+                # Find the blob with the most pixels.
+                largest_blob = max(blobs, key=lambda b: b.pixels())
 
-            center_pos = (centroid_sum / weight_sum) # Determine center of line.
+                # Draw a rect around the blob.
+                img.draw_rectangle([v for v in largest_blob.rect()])
+                img.draw_cross(largest_blob.cx(), largest_blob.cy())
 
-            # Convert the center_pos to a deflection angle. We're using a non-linear
-            # operation so that the response gets stronger the farther off the line we
-            # are. Non-linear operations are good to use on the output of algorithms
-            # like this to cause a response "trigger".
-            deflection_angle = 0
+                centroid_sum += largest_blob.cx() * r[4] # r[4] is the roi weight.
 
-            # The 80 is from half the X res, the 60 is from half the Y res. The
-            # equation below is just computing the angle of a triangle where the
-            # opposite side of the triangle is the deviation of the center position
-            # from the center and the adjacent side is half the Y res. This limits
-            # the angle output to around -45 to 45. (It's not quite -45 and 45).
-            deflection_angle = -math.atan((center_pos-80)/60)
+        center_pos = (centroid_sum / weight_sum) # Determine center of line.
 
-            # Convert angle in radians to degrees.
-            deflection_angle = math.degrees(deflection_angle)
+        # Convert the center_pos to a deflection angle. We're using a non-linear
+        # operation so that the response gets stronger the farther off the line we
+        # are. Non-linear operations are good to use on the output of algorithms
+        # like this to cause a response "trigger".
+        deflection_angle = 0
 
-            # Now you have an angle telling you how much to turn the robot by which
-            # incorporates the part of the line nearest to the robot and parts of
-            # the line farther away from the robot for a better prediction.
-            print("Turn Angle: %f" % deflection_angle)
-            draw_img.copy_to(osd_img)
-            del img
-            gc.collect()
-            print(fps.fps())
-        except KeyboardInterrupt as e:
-            print("user stop: ", e)
-            break
-        except BaseException as e:
-            sys.print_exception(e)
-            break
+        # The 80 is from half the X res, the 60 is from half the Y res. The
+        # equation below is just computing the angle of a triangle where the
+        # opposite side of the triangle is the deviation of the center position
+        # from the center and the adjacent side is half the Y res. This limits
+        # the angle output to around -45 to 45. (It's not quite -45 and 45).
+        deflection_angle = -math.atan((center_pos-80)/60)
 
-def main():
-    os.exitpoint(os.EXITPOINT_ENABLE)
-    camera_is_init = False
-    try:
-        print("camera init")
-        camera_init()
-        camera_is_init = True
-        print("camera capture")
-        capture_picture()
-    except Exception as e:
-        sys.print_exception(e)
-    finally:
-        if camera_is_init:
-            print("camera deinit")
-            camera_deinit()
+        # Convert angle in radians to degrees.
+        deflection_angle = math.degrees(deflection_angle)
 
-if __name__ == "__main__":
-    main()
+        # Now you have an angle telling you how much to turn the robot by which
+        # incorporates the part of the line nearest to the robot and parts of
+        # the line farther away from the robot for a better prediction.
+        print("Turn Angle: %f" % deflection_angle)
+
+        # draw result to screen
+        Display.show_image(img)
+        gc.collect()
+
+        print(fps.fps())
+except KeyboardInterrupt as e:
+    print(f"user stop")
+except BaseException as e:
+    print(f"Exception '{e}'")
+finally:
+    # sensor stop run
+    if isinstance(sensor, Sensor):
+        sensor.stop()
+    # deinit display
+    Display.deinit()
+
+    os.exitpoint(os.EXITPOINT_ENABLE_SLEEP)
+    time.sleep_ms(100)
+
+    # release media buffer
+    MediaManager.deinit()

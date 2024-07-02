@@ -4,45 +4,35 @@ import time, os, sys, gc
 import lvgl as lv
 from machine import TOUCH
 
-DISPLAY_WIDTH = ALIGN_UP(480, 16)
-DISPLAY_HEIGHT = 800
+DISPLAY_WIDTH = ALIGN_UP(800, 16)
+DISPLAY_HEIGHT = 480
 
 def display_init():
     # use hdmi for display
-    display.init(2)
-    # config vb for osd layer
-    config = k_vb_config()
-    config.max_pool_cnt = 1
-    config.comm_pool[0].blk_size = 4*DISPLAY_WIDTH*DISPLAY_HEIGHT
-    config.comm_pool[0].blk_cnt = 1
-    config.comm_pool[0].mode = VB_REMAP_MODE_NOCACHE
-    # meida buffer config
-    media.buffer_config(config)
-    # media buffer init
-    media.buffer_init()
-    # request media buffer for osd image
-    buffer = media.request_buffer(4 * DISPLAY_WIDTH * DISPLAY_HEIGHT)
-    # create image for osd
-    globals()["buffer"] = buffer
-    osd_img = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.ARGB8888, alloc=image.ALLOC_VB, phyaddr=buffer.phys_addr, virtaddr=buffer.virt_addr, poolid=buffer.pool_id)
-    globals()["osd_img"] = osd_img
-    osd_img.clear()
-    display.show_image(osd_img, 0, 0, DISPLAY_CHN_OSD0)
+    Display.init(Display.ST7701, width = 800, height = 480, to_ide = True)
+    # init media manager
+    MediaManager.init()
 
 def display_deinit():
-    # deinit display
-    display.deinit()
     os.exitpoint(os.EXITPOINT_ENABLE_SLEEP)
-    time.sleep_ms(100)
+    time.sleep_ms(50)
+    # deinit display
+    Display.deinit()
     # release media buffer
-    media.release_buffer(globals()["buffer"])
-    # deinit media buffer
-    media.buffer_deinit()
+    MediaManager.deinit()
 
 def disp_drv_flush_cb(disp_drv, area, color):
+    global disp_img1, disp_img2
+
     if disp_drv.flush_is_last() == True:
-        osd_img = globals()["osd_img"]
-        osd_img.copy_from(color.__dereference__(osd_img.size()))
+        if disp_img1.virtaddr() == uctypes.addressof(color.__dereference__()):
+            Display.show_image(disp_img1)
+            print(f"disp disp_img1 {disp_img1}")
+        else:
+            Display.show_image(disp_img2)
+            print(f"disp disp_img2 {disp_img2}")
+        time.sleep(0.01)
+
     disp_drv.flush_ready()
 
 class touch_screen():
@@ -63,24 +53,26 @@ class touch_screen():
             x, y, event = tp[0].x, tp[0].y, tp[0].event
             if event == 2 or event == 3:
                 state = lv.INDEV_STATE.PRESSED
-        data.point = lv.point_t({'x': x, 'y': y})
+        data.point = lv.point_t({'x': y, 'y': DISPLAY_HEIGHT - x})
         data.state = state
 
 def lvgl_init():
+    global disp_img1, disp_img2
+
     lv.init()
     disp_drv = lv.disp_create(DISPLAY_WIDTH, DISPLAY_HEIGHT)
     disp_drv.set_flush_cb(disp_drv_flush_cb)
-    buf1 = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.ARGB8888)
-    buf2 = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.ARGB8888)
-    disp_drv.set_draw_buffers(buf1.bytearray(), buf2.bytearray(), buf1.size(), lv.DISP_RENDER_MODE.DIRECT)
-    globals()["buf1"] = buf1
-    globals()["buf2"] = buf2
+    disp_img1 = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.ARGB8888)
+    disp_img2 = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.ARGB8888)
+    disp_drv.set_draw_buffers(disp_img1.bytearray(), disp_img2.bytearray(), disp_img1.size(), lv.DISP_RENDER_MODE.DIRECT)
     tp = touch_screen()
 
 def lvgl_deinit():
+    global disp_img1, disp_img2
+
     lv.deinit()
-    del globals()["buf1"]
-    del globals()["buf2"]
+    del disp_img1
+    del disp_img2
 
 def btn_clicked_event(event):
     btn = lv.btn.__cast__(event.get_target())
@@ -149,9 +141,9 @@ def user_gui_init():
 
 def main():
     os.exitpoint(os.EXITPOINT_ENABLE)
-    display_init()
-    lvgl_init()
     try:
+        display_init()
+        lvgl_init()
         user_gui_init()
         while True:
             time.sleep_ms(lv.task_handler())

@@ -6,82 +6,67 @@
 # WARNING: LBP supports needs to be reworked! As of right now this feature needs
 # a lot of work to be made into somethin useful. This script will reamin to show
 # that the functionality exists, but, in its current state is inadequate.
-
-from media.camera import *
-from media.display import *
-from media.media import *
 import time, os, gc, sys
 
-DISPLAY_WIDTH = ALIGN_UP(1920, 16)
-DISPLAY_HEIGHT = 1080
-SCALE = 4
-DETECT_WIDTH = DISPLAY_WIDTH // SCALE
-DETECT_HEIGHT = DISPLAY_HEIGHT // SCALE
+from media.sensor import *
+from media.display import *
+from media.media import *
+
+DETECT_WIDTH = ALIGN_UP(320, 16)
+DETECT_HEIGHT = 240
+
+sensor = None
 
 def camera_init():
-    # use hdmi for display
-    display.init(LT9611_1920X1080_30FPS)
-    # config vb for osd layer
-    config = k_vb_config()
-    config.max_pool_cnt = 1
-    config.comm_pool[0].blk_size = 4*DISPLAY_WIDTH*DISPLAY_HEIGHT
-    config.comm_pool[0].blk_cnt = 1
-    config.comm_pool[0].mode = VB_REMAP_MODE_NOCACHE
-    # meida buffer config
-    media.buffer_config(config)
-    # init default sensor
-    camera.sensor_init(CAM_DEV_ID_0, CAM_DEFAULT_SENSOR)
+    global sensor
+
+    # construct a Sensor object with default configure
+    sensor = Sensor(width=DETECT_WIDTH,height=DETECT_HEIGHT)
+    # sensor reset
+    sensor.reset()
+    # set hmirror
+    # sensor.set_hmirror(False)
+    # sensor vflip
+    # sensor.set_vflip(False)
+
     # set chn0 output size
-    camera.set_outsize(CAM_DEV_ID_0, CAM_CHN_ID_0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    sensor.set_framesize(width=DETECT_WIDTH,height=DETECT_HEIGHT)
     # set chn0 output format
-    camera.set_outfmt(CAM_DEV_ID_0, CAM_CHN_ID_0, PIXEL_FORMAT_YUV_SEMIPLANAR_420)
-    # create meida source device
-    globals()["meida_source"] = media_device(CAMERA_MOD_ID, CAM_DEV_ID_0, CAM_CHN_ID_0)
-    # create meida sink device
-    globals()["meida_sink"] = media_device(DISPLAY_MOD_ID, DISPLAY_DEV_ID, DISPLAY_CHN_VIDEO1)
-    # create meida link
-    media.create_link(meida_source, meida_sink)
-    # set display plane with video channel
-    display.set_plane(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, PIXEL_FORMAT_YVU_PLANAR_420, DISPLAY_MIRROR_NONE, DISPLAY_CHN_VIDEO1)
-    # set chn1 output nv12
-    camera.set_outsize(CAM_DEV_ID_0, CAM_CHN_ID_1, DETECT_WIDTH, DETECT_HEIGHT)
-    camera.set_outfmt(CAM_DEV_ID_0, CAM_CHN_ID_1, PIXEL_FORMAT_YUV_SEMIPLANAR_420)
-    # media buffer init
-    media.buffer_init()
-    # request media buffer for osd image
-    globals()["buffer"] = media.request_buffer(4 * DISPLAY_WIDTH * DISPLAY_HEIGHT)
-    # start stream for camera device0
-    camera.start_stream(CAM_DEV_ID_0)
+    sensor.set_pixformat(Sensor.GRAYSCALE)
+
+    # use IDE as display output
+    Display.init(Display.VIRT, width= DETECT_WIDTH, height = DETECT_HEIGHT,fps=100,to_ide = True)
+    # init media manager
+    MediaManager.init()
+    # sensor start run
+    sensor.run()
 
 def camera_deinit():
-    # stop stream for camera device0
-    camera.stop_stream(CAM_DEV_ID_0)
+    global sensor
+
+    # sensor stop run
+    sensor.stop()
     # deinit display
-    display.deinit()
+    Display.deinit()
+    # sleep
     os.exitpoint(os.EXITPOINT_ENABLE_SLEEP)
     time.sleep_ms(100)
     # release media buffer
-    media.release_buffer(globals()["buffer"])
-    # destroy media link
-    media.destroy_link(globals()["meida_source"], globals()["meida_sink"])
-    # deinit media buffer
-    media.buffer_deinit()
+    MediaManager.deinit()
 
 def camera_drop(frame):
     for i in range(frame):
         os.exitpoint()
-        img = camera.capture_image(CAM_DEV_ID_0, CAM_CHN_ID_1)
-        camera.release_image(CAM_DEV_ID_0, CAM_CHN_ID_1, img)
+        global sensor
+        sensor.snapshot()
 
 def capture_picture():
     # create image for drawing
-    draw_img = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.ARGB8888)
-    # create image for osd
-    buffer = globals()["buffer"]
-    osd_img = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.ARGB8888, alloc=image.ALLOC_VB, phyaddr=buffer.phys_addr, virtaddr=buffer.virt_addr, poolid=buffer.pool_id)
-    osd_img.clear()
-    osd_img.draw_string(0, 0, "Please wait...")
-    display.show_image(osd_img, 0, 0, DISPLAY_CHN_OSD0)
+    draw_img = image.Image(DETECT_WIDTH, DETECT_HEIGHT, image.ARGB8888)
+    draw_img.draw_string_advanced(0, 0, 32, "Please wait...")
+    draw_img.draw_string_advanced(0, 32, 32, "请稍后。。。")
+    # draw result to screen
+    Display.show_image(draw_img)
     # Load Haar Cascade
     # By default this will use all stages, lower satges is faster but less accurate.
     face_cascade = image.HaarCascade("frontalface", stages=25)
@@ -96,10 +81,11 @@ def capture_picture():
         fps.tick()
         try:
             os.exitpoint()
-            yuv420_img = camera.capture_image(CAM_DEV_ID_0, CAM_CHN_ID_1)
-            img = image.Image(yuv420_img.width(), yuv420_img.height(), image.GRAYSCALE, data=yuv420_img)
-            camera.release_image(CAM_DEV_ID_0, CAM_CHN_ID_1, yuv420_img)
             draw_img.clear()
+
+            global sensor
+            img = sensor.snapshot()
+
             objects = img.find_features(face_cascade, threshold=0.5, scale_factor=1.25)
             if objects:
                 face = objects[0]
@@ -108,21 +94,27 @@ def capture_picture():
                     d0 = d1
                 else:
                     dist = image.match_descriptor(d0, d1)
-                    draw_img.draw_string(0, 10, "Match %d%%"%(dist))
+                    draw_img.draw_string_advanced(0, 32, 32, "Match %d%%"%(dist))
                     print("Match %d%%"%(dist))
 
                 draw_img.draw_rectangle([v*SCALE for v in face])
             # Draw FPS
-            draw_img.draw_string(0, 0, "FPS:%.2f"%(fps.fps()))
-            draw_img.copy_to(osd_img)
+            draw_img.draw_string_advanced(0, 0, 32, "FPS:%.2f"%(fps.fps()))
+
+            # draw result to screen
+            Display.show_image(draw_img)
+
             del img
             gc.collect()
         except KeyboardInterrupt as e:
             print("user stop: ", e)
             break
         except BaseException as e:
-            sys.print_exception(e)
+            print(f"Exception {e}")
             break
+    del draw_img
+    gc.collect()
+
 
 def main():
     os.exitpoint(os.EXITPOINT_ENABLE)
@@ -134,7 +126,7 @@ def main():
         print("camera capture")
         capture_picture()
     except Exception as e:
-        sys.print_exception(e)
+        print(f"Exception {e}")
     finally:
         if camera_is_init:
             print("camera deinit")

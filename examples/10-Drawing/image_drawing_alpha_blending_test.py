@@ -4,14 +4,14 @@
 # method which can perform nearest neighbor, bilinear, bicubic, and
 # area scaling along with color channel extraction, alpha blending,
 # color palette application, and alpha palette application.
-
-from media.camera import *
-from media.display import *
-from media.media import *
 import time, os, gc, sys
 
-DISPLAY_WIDTH = ALIGN_UP(1920, 16)
-DISPLAY_HEIGHT = 1080
+from media.sensor import *
+from media.display import *
+from media.media import *
+
+DETECT_WIDTH = 640
+DETECT_HEIGHT = 480
 
 small_img = image.Image(4,4,image.RGB565)
 small_img.set_pixel(0, 0, (0,   0,   127))
@@ -38,118 +38,90 @@ alpha_div = 1
 alpha_value_init = 0
 alpha_step_init = 2
 
-x_bounce_init = DISPLAY_WIDTH//2
+x_bounce_init = DETECT_WIDTH//2
 x_bounce_toggle_init = 1
 
-y_bounce_init = DISPLAY_HEIGHT//2
+y_bounce_init = DETECT_HEIGHT//2
 y_bounce_toggle_init = 1
 
-def camera_init():
-    # use hdmi for display
-    display.init(LT9611_1920X1080_30FPS)
-    # config vb for osd layer
-    config = k_vb_config()
-    config.max_pool_cnt = 1
-    config.comm_pool[0].blk_size = 4*DISPLAY_WIDTH*DISPLAY_HEIGHT
-    config.comm_pool[0].blk_cnt = 1
-    config.comm_pool[0].mode = VB_REMAP_MODE_NOCACHE
-    # meida buffer config
-    media.buffer_config(config)
-    # init default sensor
-    camera.sensor_init(CAM_DEV_ID_0, CAM_DEFAULT_SENSOR)
-    # # set chn0 output size
-    # camera.set_outsize(CAM_DEV_ID_0, CAM_CHN_ID_0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
-    # # set chn0 output format
-    # camera.set_outfmt(CAM_DEV_ID_0, CAM_CHN_ID_0, PIXEL_FORMAT_YUV_SEMIPLANAR_420)
-    # # create meida source device
-    # globals()["meida_source"] = media_device(CAMERA_MOD_ID, CAM_DEV_ID_0, CAM_CHN_ID_0)
-    # # create meida sink device
-    # globals()["meida_sink"] = media_device(DISPLAY_MOD_ID, DISPLAY_DEV_ID, DISPLAY_CHN_VIDEO1)
-    # # create meida link
-    # media.create_link(meida_source, meida_sink)
-    # # set display plane with video channel
-    # display.set_plane(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, PIXEL_FORMAT_YVU_PLANAR_420, DISPLAY_MIRROR_NONE, DISPLAY_CHN_VIDEO1)
-    # set chn1 output nv12
-    camera.set_outsize(CAM_DEV_ID_0, CAM_CHN_ID_1, DISPLAY_WIDTH, DISPLAY_HEIGHT)
-    camera.set_outfmt(CAM_DEV_ID_0, CAM_CHN_ID_1, PIXEL_FORMAT_RGB_888)
-    # media buffer init
-    media.buffer_init()
-    # request media buffer for osd image
-    globals()["buffer"] = media.request_buffer(4 * DISPLAY_WIDTH * DISPLAY_HEIGHT)
-    # start stream for camera device0
-    camera.start_stream(CAM_DEV_ID_0)
+sensor = None
 
-def camera_deinit():
-    # stop stream for camera device0
-    camera.stop_stream(CAM_DEV_ID_0)
-    # deinit display
-    display.deinit()
-    os.exitpoint(os.EXITPOINT_ENABLE_SLEEP)
-    time.sleep_ms(100)
-    # release media buffer
-    media.release_buffer(globals()["buffer"])
-    # destroy media link
-    # media.destroy_link(globals()["meida_source"], globals()["meida_sink"])
-    # deinit media buffer
-    media.buffer_deinit()
+try:
+    # construct a Sensor object with default configure
+    sensor = Sensor(width = DETECT_WIDTH, height = DETECT_HEIGHT)
+    # sensor reset
+    sensor.reset()
+    # set hmirror
+    # sensor.set_hmirror(False)
+    # sensor vflip
+    # sensor.set_vflip(False)
+    # set chn0 output size
+    sensor.set_framesize(width = DETECT_WIDTH, height = DETECT_HEIGHT)
+    # set chn0 output format
+    sensor.set_pixformat(Sensor.RGB565)
 
-def draw():
-    # create image for osd
-    buffer = globals()["buffer"]
-    osd_img = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.RGB565, alloc=image.ALLOC_VB, phyaddr=buffer.phys_addr, virtaddr=buffer.virt_addr, poolid=buffer.pool_id)
-    osd_img.clear()
-    display.show_image(osd_img, 0, 0, DISPLAY_CHN_OSD0)
+    # use hdmi as display output, set to VGA
+    # Display.init(Display.LT9611, width = 640, height = 480, to_ide = True)
+
+    # use hdmi as display output, set to 1080P
+    # Display.init(Display.LT9611, width = 1920, height = 1080, to_ide = True)
+
+    # use lcd as display output
+    # Display.init(Display.ST7701, to_ide = True)
+
+    # use IDE as output
+    Display.init(Display.VIRT, width = DETECT_WIDTH, height = DETECT_HEIGHT, fps = 100)
+
+    # init media manager
+    MediaManager.init()
+    # sensor start run
+    sensor.run()
+
+    fps = time.clock()
+
     alpha_value = alpha_value_init
     alpha_step = alpha_step_init
     x_bounce = x_bounce_init
     x_bounce_toggle = x_bounce_toggle_init
     y_bounce = y_bounce_init
     y_bounce_toggle = y_bounce_toggle_init
-    fps = time.clock()
+
     while True:
         fps.tick()
-        try:
-            os.exitpoint()
-            rgb888_img = camera.capture_image(CAM_DEV_ID_0, CAM_CHN_ID_1)
-            img = rgb888_img.to_rgb565()
-            camera.release_image(CAM_DEV_ID_0, CAM_CHN_ID_1, rgb888_img)
-            img.draw_image(big_img, x_bounce, y_bounce, rgb_channel=-1, alpha=alpha_value//alpha_div)
+        # check if should exit.
+        os.exitpoint()
 
-            x_bounce += x_bounce_toggle
-            if abs(x_bounce-(img.width()//2)) >= (img.width()//2): x_bounce_toggle = -x_bounce_toggle
+        img = sensor.snapshot()
 
-            y_bounce += y_bounce_toggle
-            if abs(y_bounce-(img.height()//2)) >= (img.height()//2): y_bounce_toggle = -y_bounce_toggle
+        img.draw_image(big_img, x_bounce, y_bounce, rgb_channel=-1, alpha=alpha_value//alpha_div)
 
-            alpha_value += alpha_step
-            if not alpha_value or alpha_value//alpha_div == 256: alpha_step = -alpha_step
+        x_bounce += x_bounce_toggle
+        if abs(x_bounce-(img.width()//2)) >= (img.width()//2): x_bounce_toggle = -x_bounce_toggle
 
-            img.copy_to(osd_img)
-            del img
-            gc.collect()
-            print(fps.fps())
-        except KeyboardInterrupt as e:
-            print("user stop: ", e)
-            break
-        except BaseException as e:
-            sys.print_exception(e)
-            break
+        y_bounce += y_bounce_toggle
+        if abs(y_bounce-(img.height()//2)) >= (img.height()//2): y_bounce_toggle = -y_bounce_toggle
 
-def main():
-    os.exitpoint(os.EXITPOINT_ENABLE)
-    camera_is_init = False
-    try:
-        print("camera init")
-        camera_init()
-        camera_is_init = True
-        print("draw")
-        draw()
-    except Exception as e:
-        sys.print_exception(e)
-    finally:
-        if camera_is_init:
-            print("camera deinit")
-            camera_deinit()
+        alpha_value += alpha_step
+        if not alpha_value or alpha_value//alpha_div == 256: alpha_step = -alpha_step
 
-if __name__ == "__main__":
-    main()
+        # draw result to screen
+        Display.show_image(img)
+
+        gc.collect()
+        print(fps.fps())
+except KeyboardInterrupt as e:
+    print(f"user stop")
+except BaseException as e:
+    print(f"Exception '{e}'")
+finally:
+    # sensor stop run
+    if isinstance(sensor, Sensor):
+        sensor.stop()
+    # deinit display
+    Display.deinit()
+
+    os.exitpoint(os.EXITPOINT_ENABLE_SLEEP)
+    time.sleep_ms(100)
+
+    # release media buffer
+    MediaManager.deinit()
