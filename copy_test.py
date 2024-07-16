@@ -11,7 +11,6 @@ copy_map = {
     "cipher": "03-Cipher",
     "Codes": "08-Codes",
     "Color-Tracking": "09-Color-Tracking",
-    "demo": "04-AI-Demo",
     "Drawing": "10-Drawing",
     "Feature-Detection": "11-Feature-Detection",
     "Image-Filters": "12-Image-Filters",
