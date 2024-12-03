@@ -23,11 +23,11 @@ def zip_directory(directory_path, zipf, parent_dir=''):
 if __name__ == '__main__':
     script_path = os.path.dirname(os.path.abspath(__file__))
     version = None
-    version_file_path = os.path.join(script_path, 'examples.txt')
+    version_file_path = os.path.join(script_path, 'version.txt')
     with open(version_file_path) as f:
         version = f.read().strip()
     if not version:
-        raise 'examples.txt not found'
+        raise 'version.txt not found'
     print('Version:', version)
     resource_path = os.path.join(script_path, f'canmv-ide-resources-{version}.zip')
     print('Resource:', resource_path)
